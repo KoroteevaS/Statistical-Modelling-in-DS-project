@@ -1,0 +1,164 @@
+---
+title: "DATA 303/473 Assignment 1"
+author: "Svetlana Koroteeva, 300432399"
+date: "`r Sys.Date()`"
+output: 
+  pdf_document: 
+    keep_tex: yes
+    latex_engine: lualatex
+    number_sections: yes
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE, message=FALSE)
+```
+
+## Questions 1 {-}
+### Q1 a) {-}
+
+```{r}
+library(dplyr)
+cancer_reg<-read.csv('C:/Users/Korotesv/R/Assignment1/cancer_reg.csv')
+cancer2<-cancer_reg %>% dplyr::select(incidencerate, medincome, povertypercent, studypercap, medianage, pctunemployed16_over, pctprivatecoverage, pctbachdeg25_over, target_deathrate)
+cancer2 <-na.omit(cancer2)
+summary(cancer2)
+
+```
+First dataset information shows 3047 obs. of  9 variance
+According to the graph provided median age is looking not quite correct and we can assume that not correct variables are presented. Summary of cancer dataset shows that maximum of median age is 624 which could not be correct. All the observations where medianage is bigger than 120 will be filtered.  
+The number of observations reduced to 3017  
+```{r}
+cancer2 = filter(cancer2, medianage < 120)
+
+```
+### Q1 b){-}
+```{r}
+cancer3<-read.csv('C:/Users/Korotesv/R/Assignment1/cancer3.csv')
+summary(cancer3)
+library(dplyr)
+library(psych)
+cancer3%>%  
+  dplyr::select(where(is.numeric))%>%
+  pairs.panels(method = "spearman", # correlation method
+             hist.col = "lightgreen", # histogram color
+             density = TRUE,  # show density plots
+             ellipses = FALSE # do not show correlation ellipses
+             )
+```
+
+There are several observations from scatter plot  matrix:  
+1. Death  rate distribution is symmetrical.   
+2. There is non-linearity in relationship between death rate and most of the predictors.  
+3. Death rate and Cancer Diagnosis have almost linear correlation.  
+4. There is almost linear correlation between Income and Higher education, and negative correlation between poverty percent and health coverage, as well as unemployed and health coverage. And non-linear correlation between income and health coverage. So multicollinearity should be investigated.  
+
+```{r}
+
+fit1<-lm(target_deathrate ~ incidencerate + medincome + povertypercent + studypercap + medianage + pctunemployed16_over + pctprivatecoverage + pctbachdeg25_over, data=cancer3) ##Fit the model
+library(pander)
+pander(summary(fit1), caption="")
+
+```
+
+### Q1 c) {-}
+
+Error vairance σ^2 = 20.22^2=408.84
+
+### Q1 d) {-}
+
+An increase in incidencerate by 1 per 100,000 if we go from one county to another is associated with an increasing in expected cancer mortality on  0.2209 mean per capita for 100000 for these two countries
+
+###  Q1 e) {-}
+
+It makes sense to inerpret intercept when all predictor values of zero make sense and if all observations close to zero for all predictors. In this case it make sense to estimate mortality when all predictor values are zero.There is no sample data of it, so not appropriate to interpret.
+
+
+```{r}
+
+new_row <- c(452,23000,16,150,40,8,70,50) 
+cancer4 <- rbind(cancer3, new_row)
+cancerdata = subset(cancer4, (medincome == 23000)) 
+pander(predict (fit1, newdata=cancerdata, interval="confidence"),
+caption="Confidence intervals", round=2)
+pander ( predict (fit1, newdata=cancerdata, interval="prediction"),
+round=2,caption="Prediction intervals")
+     
+```
+
+### Q1 f) {-}
+
+The model uses the predictor values  
+• incidencerate: 452  
+• medincome: 23000  
+• povertypercent: 16  
+• studypercap: 150  
+• medianage: 40  
+• pctunemployed16_over: 8  
+• pctprivatecoverage: 70  
+• pctbachdeg25_over: 50  
+Obtain 95% confidence and prediction intervals   
+
+Looking at both tables there 95% confidence that mean death rate for observation with the same characteristic is between 109.4 and 127.8 per 100000.  
+Prediction interval is slightly different. We are 95% that the predicted death rate is between 77.9 and 159.3 per 100000.
+Both intervals are centered at 188.6  but prediction interval is wider then confidence interval. Prediction interval reflects greater uncertainty about individual dathe rate compare to average death rate.  
+
+### Q1 g) {-}
+
+For data to be valid all values used in the prediction should be within the range of the values in the model dataset.
+We are comparing if given values are inside of min and max range from summary. And we see that one of the predictors - bachelor degree percent is 70, however range of model values should be between 2.50 and 42.20. So this assumption failed and data is not valid.  
+It is also valid when linearity, independent errors,normal errors and equal error variances are met, however do not need to check this assumption if previous is failed.  
+
+```{r}
+summary(fit1)
+pander(summary(fit1))
+```
+
+### Q1 h) {-}
+
+**Global usefulness test Results**
+
+There is  strong evidence (F= 333.1, p-value: < 2.2e-16 -very small p-value) to reject the null hypothesis. Therefore it is worth going on to further analyse and interpret a model of mortality against the 8 predictors as the test indicates that at least one of the predictors is an important predictor of death rate.
+
+### Q1 i) {-}
+
+Looking at the graphs provided there is potential non-linearity in relationship between price  and each of numerical predictions. Logistic regression should be considered.
+
+```{r}
+galton<-read.csv('C:/Users/Korotesv/R/Assignment1/galton.csv')
+
+fit3<-lm(height ~ father + mother + gender +  kids + midparent + adltchld, data=galton)
+summary(fit3)
+```
+## Questions 2 {-}
+
+###  Q2 a) {-}
+
+The trial to fit the model results NA in midparent field and message "Coefficients: (1 not defined because of singularities" This might mean strong correlation between predictors or multicollinearity. We can see it from the formula from which this column is calculated ‘father + 1.08*mother)/2. 
+
+### Q2 b) {-}
+
+There is 2 ways to fix this problem:  
+1) Combine the colinear predictors together.  
+2)Take out one of the predictors with the  large p_values for the t_test  
+
+### Q2 c) {-}
+
+  Based on the model fitted in part (a) give an interpretation of the coefficient for genderM.
+  The expected height in Male category was higher then for Female on 5.128 inches, when all other predictors are kept constant 
+
+
+ 
+```{r}
+familyids <-dplyr::select(galton, familyID)
+n_distinct(familyids)
+#pander(vif(fit4), digits=2, caption="VIF values")
+
+```
+
+### Q2 d) {-}
+
+  There is 197 families participated
+  
+### Q2 e) {-}
+
+The pattern of Residuals vs Fitted  is not curved so relationships between predictors should be linear and possibly not require  transformations
+479 ,  60 and 289 observations are standing out on all the plots and could be potentially problematic. They have unusually large residuals. Also regression model assumption says that errors are independent on each other, however we know that they are not in our case as there  is 898 observations in the dataset, however they all spread between 197 families. And height of children inside of 1 family is similar. So the model does not meet this assumption.
