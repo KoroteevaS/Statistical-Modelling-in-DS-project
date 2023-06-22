@@ -1,0 +1,784 @@
+---
+title: "Project Sculpture shipping price"
+author: "Svetlana Koroteeva,  300432399"
+date: "`r Sys.Date()`"
+output: 
+  pdf_document: 
+    latex_engine: lualatex
+    keep_tex: yes
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,warning = FALSE, message =  FALSE)
+```
+# Art logistic 
+
+## Summary
+  
+  An art exhibitor plans to launch an online portal for art enthusiasts worldwide to collect art with only a click of a button. The exhibitor is interested in determining how different artifact attributes affect shipping cost.  They would like to be able to predict the likely shipping cost of an artifact when they acquire it.
+  
+After exploratory data analysis, missing data imputation, several models were built for this project. There were investigation linear models with transformation, generalized additive models (GAM), subset selection and ridge regression.
+
+Based on art dataset predictors influence on shipment price  several  models for predicting shipment price was build and compared. Predictions was estimated , better models selected and further recommendation were given in result section.
+
+## EDA and data imputation
+
+### Dealing with missing data
+
+Art set includes 6500 artifacts for the analysis exercise.   The dataset consists of “Customer Id”, “Artist Name”,  “Artist Reputation”, “Height”,  Width”, “Weight”,  “Material”, “Price Of Sculpture” , “Base Shipping Price”   “International”, “Express Shipment”, “Installation Included”, “Transport”,  “Fragile”,  “Customer Information”, “Remote Location” ,  “Scheduled Date”, “Delivery Date”, “Customer Location”, “Cost”  .
+Set summary shows that 7 columns contains missing values. Omitting them leaves only half of the set, which is  far more then 25%, so data imputation will be the best way On the coloured matrix, table (Fig. 1)  and heatmap we can see that the affected columns are Width, Height, Weight, Artist Reputation, Material, Remote Location, Transport. Missing values spread across the set and clustering  in  the mentioned columns.
+
+
+```{r}
+
+library(dplyr)
+library(printr)
+library(readr)
+library(ggplot2)
+sc<-as.data.frame(readr::read_csv(file="art.csv"))
+library(tidyverse)
+view(sc)
+
+summary(sc)
+str(sc)
+names(sc)
+```
+
+
+```{r}
+for ( i in 1:20){
+        colnames(sc)[i] <- gsub(' ', '_', colnames(sc)[i]);
+}
+
+class(sc$Customer_Id)
+sc$Material <- as.factor(sc$Material)
+sc$International<- as.factor(sc$International)
+sc$Express_Shipment<- as.factor(sc$Express_Shipment)
+sc$Installation_Included <- as.factor(sc$Installation_Included)
+sc$Transport <- as.factor(sc$Transport)
+sc$Fragile<- as.factor(sc$Fragile)
+sc$Customer_Information <- as.factor(sc$Customer_Information)
+sc$Remote_Location <- as.factor(sc$Remote_Location)
+
+sculpt.cut = na.omit(sc)
+dim(sculpt.cut)
+```
+Further investigation  and imputation should be performed.  On the colored matrix, table and heatmap we can see that affected columns are Width, Height, Weight, Artist Reputation, Material, Remote Location, Transport. Missing values spread across the set and clustering  in  the mentioned columns. 
+```{r}
+
+require(mice)
+
+md.pattern(
+  sc,
+  plot=TRUE,
+  rotate.names = TRUE
+)
+
+```
+```{r}
+md_pairs_sc <-md.pairs(data=sc)
+str(md_pairs_sc,1)
+heatmap(x = md_pairs_sc$rr,
+        col=viridis::viridis(256))# all observed
+heatmap(x = md_pairs_sc$rm,
+        col=viridis::viridis(256))#row observed columns missing
+heatmap(x = md_pairs_sc$mr,
+        col=viridis::viridis(256)) # row mising columns observed
+heatmap(x = md_pairs_sc$mm, #all missing
+        col=viridis::viridis(256))
+```
+The imputation had been performed via mice (Multivariate imputation by chained equations)  package which implements a method to deal with missing data based on Fully Conditional Specification (see methodology).
+
+```{r}
+
+p_missing <- unlist(lapply(sc, function(x) sum(is.na(x))))/nrow(sc)
+p_missing
+sort(p_missing[p_missing > 0], decreasing = TRUE)
+```
+Perform data imputation and check the new set
+```{r}
+#cc(x=sc) # complete cases
+#ncc(x=sc)# number complete cases
+#nic(x=sc)#number incomplete cases
+#table(cci(x=sc)) #subset of complete cases
+#head(ic(x=sc))#incomplete cases
+#Making set withot columns with missing data to for imputing
+sc3 <- select(sc,"Artist_Reputation","Height","Width","Weight","Material","Remote_Location" ,"Transport")
+
+#Making set with the columns which should not be changed 
+sc4 <- sc %>% 
+  dplyr::select(-"Artist_Reputation",-"Height",-"Width",-"Weight",-"Material",-"Remote_Location", -"Transport")
+#Imputation
+imp <- mice(sc3, maxit=0)
+predM <- imp$predictorMatrix
+meth <- imp$method
+imp2 <- mice(sc3, maxit = 5, 
+             predictorMatrix = predM, 
+             method = meth, print =  FALSE)
+
+miceimputed2 <-mice::complete(imp2,2)
+head(miceimputed2)
+#Make new data set  from imputed and untoughched columns
+sc.complete <- cbind(sc4, miceimputed2 )
+#Make sure that NA data disappeared
+#sc.complete
+summary(sc.complete)
+
+```
+
+## Further EDA
+
+From the first look at the predictors we can see that Customer ID column  and Customer location does not have repetition, however there is 51 times the same author name encounter. These columns could be considered for deletion.
+Date column might influence and for easier calculation it could be converted to date stamps. In addition, 2 other columns produced, which includes years from scheduled and delivered dated and another column added as scheduled and delivered time difference to see, how timeline influences the shipping price.
+
+The scatterplot matrix (Fig. 3) shows possible non-linear relationships between the response variable  Cost and predictors Artist Reputation, Hight, Width; transformations of these predictors should be considered. The response variable Cost is skewed, so a transformation should be considered for dealing with non-normality. The matrix plot shows moderate pairwise correlations between predictors weight and price of sculpture, width and height. Multicollinearity should be investigated. The plot also shows that all the date variables and artist reputation have almost 0 correlation with response variables. 
+As part of the task scheduled and delivery date were investigated and difference applied to the dataset. Also Years from these columns were extracted to separate column for further investigation. Time Difference has very low correlation to other data. 
+Non-numerical values are fit in box plot vs Cost. Almost of the box “flatten” to the bottom line and multiple outliers presented. To cut outliers boxplot method was used. On Fig. 6 boxplot for the same predictors are paired before and after.
+
+
+
+```{r}
+
+#install.packages("lubridate")
+library(lubridate)
+#check for non -unique
+sum(duplicated(sc.complete$Artist_Name))
+sum(duplicated(sc.complete$Customer_Id))
+sum(duplicated(sc.complete$Customer_Location))
+#change year format in  scheduled and delivery date to YYYY
+sc.complete$Delivery_Date <- gsub('/19$', '/2019', sc.complete$Delivery_Date)
+sc.complete$Delivery_Date <- gsub('/18$', '/2018', sc.complete$Delivery_Date)
+sc.complete$Delivery_Date <- gsub('/17$', '/2017', sc.complete$Delivery_Date)
+sc.complete$Delivery_Date <- gsub('/16$', '/2016', sc.complete$Delivery_Date)
+sc.complete$Delivery_Date <- gsub('/15$', '/2015', sc.complete$Delivery_Date)
+uts<- as.numeric(as.POSIXct(parse_date_time(sc.complete$Delivery_Date, orders = c("mdy"))))
+uts_i <- which(!is.na(uts))
+sc.complete$Delivery_Date[uts_i] = uts[uts_i]
+
+sc.complete$Scheduled_Date <- gsub('/18$', '/2018', sc.complete$Scheduled_Date)
+sc.complete$Scheduled_Date <- gsub('/19$', '/2019', sc.complete$Scheduled_Date)
+sc.complete$Scheduled_Date <- gsub('/17$', '/2017', sc.complete$Scheduled_Date)
+sc.complete$Scheduled_Date <- gsub('/16$', '/2016', sc.complete$Scheduled_Date)
+sc.complete$Scheduled_Date <- gsub('/15$', '/2015', sc.complete$Scheduled_Date)
+uts<- as.numeric(as.POSIXct(parse_date_time(sc.complete$Scheduled_Date, orders = c("mdy"))))
+uts_i <- which(!is.na(uts))
+sc.complete$Scheduled_Date[uts_i] = uts[uts_i]
+
+sc.complete$Scheduled_Date<-as.numeric(sc.complete$Scheduled_Date)
+sc.complete$Delivery_Date<-as.numeric(sc.complete$Delivery_Date)
+#Calculateing difference between expected and delivered
+time.diff.col <- c(difftime(as.POSIXct(sc.complete$Scheduled_Date, origin = '1970-01-01'), as.POSIXct(sc.complete$Delivery_Date, origin = '1970-01-01'), units = "days"))
+sc.complete <- cbind(sc.complete, time.diff.col)
+colnames(sc.complete)[21] <- "Times_Difference"
+sc.complete$Times_Difference<-as.numeric(sc.complete$Times_Difference)
+sc.year.sch <- c(year(as.POSIXct(sc.complete$Scheduled_Date, origin = '1970-01-01'))) 
+sc.year.del <- c(year(as.POSIXct(sc.complete$Delivery_Date, origin = '1970-01-01')))
+str(sc.complete)
+sc.complete <- cbind(sc.complete, sc.year.sch, sc.year.del)
+#sc.complete
+colnames(sc.complete)[22] <- "Year_Scheduled"
+colnames(sc.complete)[23] <- "Year_Delivery"
+
+str(sc.complete)
+sc.complete$'Year_Scheduled'<- as.factor(sc.complete$"Year_Scheduled")
+sc.complete$'Year_Delivery'<- as.factor(sc.complete$"Year_Delivery")
+#table(sc.complete$'Artist Name')
+#library(data.table)
+#setDT(sc.complete)[, .N, 'Artist Name']
+library(psych)
+library(ape)
+#sc.complete$Scheduled_Date<-as.character(sc.complete$Scheduled_Date)
+#sc.complete$Delivery_Date<-as.character(sc.complete$Delivery_Date)
+sc.complete%>%
+select(where(is.numeric))%>% #select numerical variables (includes integers)
+pairs.panels(method = "spearman", # correlation method
+hist.col = "lightgreen", # histogram color
+density = TRUE, # show density plots
+ellipses = FALSE # do not show correlation ellipses
+)
+
+```
+Looking at the Material-Cost price boxplots (Fig.4)- heavy materials (as metal, stone, marble) affect Cost the most. Waterway shipping is slightly cheaper. Fragile items are cheaper in general, however they have outliers. Express shipment, international shipment, remote location, working or wealthy customer status affect cost  only slightly.
+As result of Exploratory data analysis for the further investigation we can exclude Customer Id, Artist Name, Times Difference. As scheduled and delivery date have correlation one of the parameters could be excluded (and also times difference comes from normal distribution).  Data set was saved as art_to_research.csv
+
+```{r}
+
+names(sc.complete)
+#boxplot(sc.complete$Cost, plot=FALSE)$out
+outliers <- boxplot(sc.complete$Cost, plot=FALSE)$out
+x<-sc.complete
+x<- x[-which(x$Cost %in% outliers),]
+
+sc.complete%>%
+select(Cost, where(is.factor))%>% 
+ggplot(aes(x=Transport,y=Cost))+
+geom_boxplot()
+
+x%>%
+select(Cost, where(is.factor))%>% 
+ggplot(aes(x=Transport,y=Cost))+
+geom_boxplot()
+
+sc.complete%>%
+select(Cost, where(is.factor))%>% 
+ggplot(aes(x=Material,y=Cost))+
+geom_boxplot()
+
+x%>%
+select(Cost, where(is.factor))%>% 
+ggplot(aes(x=Material,y=Cost))+
+geom_boxplot()
+
+
+sc.complete%>%
+select(Cost, where(is.factor))%>% 
+ggplot(aes(x=Year_Scheduled,y=Cost))+
+geom_boxplot()
+
+x%>%
+select(Cost, where(is.factor))%>% 
+ggplot(aes(x=Year_Scheduled,y=Cost))+
+geom_boxplot()
+
+sc.complete%>%
+select(Cost, where(is.factor))%>% 
+ggplot(aes(x=Year_Delivery,y=Cost))+
+geom_boxplot()
+x%>%
+select(Cost, where(is.factor))%>% 
+ggplot(aes(x=Year_Delivery,y=Cost))+
+geom_boxplot()
+
+sc.complete%>%
+select(Cost, where(is.factor))%>% 
+ggplot(aes(x=International,y=Cost))+
+geom_boxplot()
+
+x%>%
+select(Cost, where(is.factor))%>% 
+ggplot(aes(x=International,y=Cost))+
+geom_boxplot()
+
+sc.complete%>%
+select(Cost, where(is.factor))%>% 
+ggplot(aes(x=Fragile,y=Cost))+
+geom_boxplot()
+
+x%>%
+select(Cost, where(is.factor))%>% 
+ggplot(aes(x=Fragile,y=Cost))+
+geom_boxplot()
+
+sc.complete%>%
+select(Cost, where(is.factor))%>% 
+ggplot(aes(x=Remote_Location,y=Cost))+
+geom_boxplot()
+
+x%>%
+select(Cost, where(is.factor))%>% 
+ggplot(aes(x=Remote_Location,y=Cost))+
+geom_boxplot()
+
+sc.complete%>%
+select(Cost, where(is.factor))%>% 
+ggplot(aes(x=Customer_Information,y=Cost))+
+geom_boxplot()
+
+x%>%
+select(Cost, where(is.factor))%>% 
+ggplot(aes(x=Customer_Information,y=Cost))+
+geom_boxplot()
+
+
+sc.complete%>%
+select(Cost, where(is.factor))%>% 
+ggplot(aes(x=Express_Shipment,y=Cost))+
+geom_boxplot()
+
+x%>%
+select(Cost, where(is.factor))%>% 
+ggplot(aes(x=Express_Shipment,y=Cost))+
+geom_boxplot()
+
+sc.complete%>%
+select(Cost, where(is.factor))%>% 
+ggplot(aes(x=Installation_Included,y=Cost))+
+geom_boxplot()
+
+x%>%
+select(Cost, where(is.factor))%>% 
+ggplot(aes(x=Installation_Included,y=Cost))+
+geom_boxplot()
+
+#write.csv(sc.complete, "art_complete.csv")
+
+sculp <- sc.complete %>% 
+  dplyr::select(-"Times_Difference",-"Artist_Name",-"Customer_Id")
+                
+#write.csv(sculp, "art_to_research.csv")
+str(sculp)
+
+
+```
+
+## Metodology
+
+###	Data imputation
+
+Data imputation have been performed via mice based on “fully conditional specification” or “sequential regression multiple imputation”. There are 2 approaches: single imputation based on means and not account to uncertainty of imputation and  Compare to single imputation multiple imputation involved creating multiple sets, and not performing well if observed values are not predictable. The second approach involves making several datasets. MICE uses multiple approach however the mice model in joining both ways. MICE operates under the assumption that the missing data are Missing At Random (MAR). The chained equation process includes steps which are repeated for each missing variable and imputation was updated after each cycle.
+1.Mean imputation. 2. One “mean” placeholder set back to missing. 3.It regressed to other variables in  the regression model. 4. This missing variable replaced with prediction of this regression model
+Optimal number of cycles is specified by the researcher. I have set maxit parameter equals 5. Missing value analysis  (Figs. 1-3) showed that all missing variables are spread equally across the set. There was not found a reason to exclude some of the predictors, though artist reputation could be excluded as it is correlated only with the cost and price of sculpture, I left it for further investigation.
+Concerining other MICE parameters used for imputation PredictorMatrix and Method, default method, which is used in the current imputation method assumes that continuous data are imputed by predictive mean and matrix tells the algorithm which variables predict missingness in which other variables by default based on correlations between variables and the proportion of usable cases.
+Complete function taking previous setting and number of set created. I have chosen 2. There are also options ‘long’ and ‘board’ which could be explored. 
+Imputed data set saved as “art_to_research.csv”
+
+### 3.2.	Linear  regression models
+
+For more clear picture numerical predictors fitted to response variable in scatter plots. (Fig. 5). Predictors which demonstrated non-linearity – basic_shipping_price, height and artist reputation.
+To start subset selection we are fitting dataset to linear models and implementing the recommendation from EDA paragraph 2.  The first fit includes all the predictors and does not have transformations.
+Cost= β0+β1* Price_Of_Sculpture  +  β2* Base_Shipping_Price + β3* International + β4* Express_Shipment + β5* Installation_Included + β6* Fragile + β7* Customer_Information + β8* Scheduled_Date  + β9* Delivery_Date + β10* Artist_Reputation + β11* Height + β12* Width + β13* Weight + β14* Material + β15* Remote_Location+ β16* Transport+ β17* Year_Scheduled+ β18* Year_Delivery
+Plots (Fig. 6)  show that there is an indication of non-linearity (some curve Residual vs Fitted plot), non-normality (points not  on line QQ plot) and  non-constant variance when  fitted values increase(Scale-Location plot). Shapiro test shows that there is no evidence that residuals come from normal distribution. Breush-Pagan test shows that null hypothesis of homoskedasticity is rejected and heteroskedasticity (non-constant variance) assumed. Variance Inflation  factor indicates that all date predictors  have severe multicollinearity which may lead to non-reliable coefficients. Therefore they should be deleted or combined to single variable. Figure 7 contains the plot after removing outliers and highly influential observation 4177,  4072  which appeared after on Residuals vs Leverage plot were detected. Note, with a different scale all previous observation became more visible.
+For the next 4 fits the following modification had been done fit2 – removed date columns, fit3 – added log transformation for response variable, fit4 – added log transformation for basic shipment price, fit 5 – added log transformation for width, and polynomial transformation to Artist Reputation and Basic Shipment Price.
+Assumptions check plots (Fig.8) demonstrate improvements for s non-normality, non-linearity, non- constant variance. To estimate progress R squared is used. Proportion of variance is accounted for by the model gradually increased after each modification and Fit5 looks especially promising.
+
+
+
+```{r}
+sculp<-as.data.frame(readr::read_csv(file="art_to_research.csv"))
+colnames(sculp)
+
+outliers <- boxplot(sculp$Cost, plot=FALSE)$out
+sculp.nout<-sculp
+sculp.nout<- sculp.nout[-which(sculp.nout$Cost %in% outliers),]
+
+library(ggplot2)
+library(pander)
+a<-ggplot(sculp.nout,aes(x=Cost, y=Price_Of_Sculpture))+
+geom_point()+ geom_smooth(method='loess')+labs(x="Cost", y="Price of sc.")+
+theme_bw()
+b<-ggplot(sculp.nout,aes(x=Cost, y=Base_Shipping_Price))+
+geom_point()+ geom_smooth(method='loess') +
+labs(x="Cost", y="Basic shipment")+
+theme_bw()
+c<-ggplot(sculp.nout,aes(x=Cost, y=Width))+
+geom_point()+ geom_smooth(method='loess') +
+labs(x="Cost", y="Width")+
+theme_bw()
+d<-ggplot(sculp.nout,aes(x=Cost, y=Height))+
+geom_point()+ geom_smooth(method='loess') +
+labs(x="Cost", y="Height")+
+theme_bw()
+e<-ggplot(sculp.nout,aes(x=Cost, y=Weight))+
+geom_point()+ geom_smooth(method='loess') +
+labs(x="Cost", y="Weight")+
+theme_bw()
+f<-ggplot(sculp.nout,aes(x=Cost, y=Artist_Reputation))+
+geom_point()+ geom_smooth(method='loess') +
+labs(x="Cost", y="Reputation")+
+theme_bw()
+library(gridExtra)
+grid.arrange(a,b,c,d,e,f, nrow=2)
+
+```
+Fitting linear model on all the predictors than with cut outliers and then to cut highly influencial points.VIF more then 10 for all dat predictors. 
+```{r}
+fit1 <- lm(Cost~ Price_Of_Sculpture  +  Base_Shipping_Price+International+Express_Shipment+Installation_Included+Fragile+Customer_Information+Scheduled_Date+Delivery_Date+Artist_Reputation+Height+Width+Weight+Material+Remote_Location+Transport+Year_Scheduled+Year_Delivery, data=sculp.nout)
+sum.fit0.r<-summary(fit1)$r.sq
+sum.fit0.r
+plot(fit1)
+library(dplyr)
+sculp2 <- sculp.nout %>%
+  filter(!row_number() %in% c(4177))
+sculp2 <- sculp2 %>%
+  filter(!row_number() %in% c(4072))
+fit1 <- lm(Cost~ Price_Of_Sculpture  +  Base_Shipping_Price+International+Express_Shipment+Installation_Included+Fragile+Customer_Information+Scheduled_Date+Delivery_Date+Artist_Reputation+Height+Width+Weight+Material+Remote_Location+Transport+Year_Scheduled+Year_Delivery, data=sculp2)
+sum.fit1.r<-summary(fit1)$r.sq
+sum.fit1.r
+plot(fit1)
+car::vif(fit1)
+train = sample(1:dim(sculp2)[1], dim(sculp2)[1]*0.8)
+test <- -train
+sculp.train <- sculp2[train, ]
+fit1.sample <- lm(Cost~ Price_Of_Sculpture  +  Base_Shipping_Price+International+Express_Shipment+Installation_Included+Fragile+Customer_Information+Scheduled_Date+Delivery_Date+Artist_Reputation+Height+Width+Weight+Material+Remote_Location+Transport+Year_Scheduled+Year_Delivery, data=sculp.train)
+
+shapiro.test(fit1.sample$res)
+library(lmtest)
+bptest(fit1)
+```
+For the next for fit the following modification had been done fit2 – removed date columns, fit3 – added log transformation for response variable, fit4 – added log transformation for basic shipment price, fit 5 – added log transformation for width , and polynomial transformation to Artist Reputation and Basic Shipment Price. 
+
+```{r}
+fit2 <-lm(Cost~ Price_Of_Sculpture  +  Base_Shipping_Price+International+Express_Shipment+Installation_Included+Fragile+Customer_Information+Artist_Reputation+Height+Width+Weight+Material+Remote_Location+Transport, data=sculp2)
+sum.fit2.r<-summary(fit2)$r.sq
+sum.fit2.r
+plot(fit2)
+
+fit3 <- lm(log(Cost)~ Price_Of_Sculpture  +  Base_Shipping_Price+International+Express_Shipment+Installation_Included+Fragile+Customer_Information+Artist_Reputation+Height+Width+Weight+Material+Remote_Location+Transport, data=sculp2)
+sum.fit3.r<-summary(fit3)$r.sq
+sum.fit3.r
+plot(fit3)
+
+fit4 <- lm(log(Cost)~ Price_Of_Sculpture  +  log(Base_Shipping_Price)+International+Express_Shipment+Installation_Included+Fragile+Customer_Information+Artist_Reputation+Height+Width+Weight+Material+Remote_Location+Transport, data=sculp2)
+sum.fit4.r<-summary(fit4)$r.sq
+plot(fit4)
+sum.fit4.r
+fit5 <- lm(log(Cost)~ Price_Of_Sculpture  +  poly(Base_Shipping_Price,10)+International+Express_Shipment+Installation_Included+Fragile+Customer_Information+poly(Artist_Reputation,8)+Height+log(Width)+Weight+Material+Remote_Location+Transport, data=sculp2)
+sum.fit5.r<-summary(fit5)$r.sq
+sum.fit5.r
+plot(fit5)
+
+r.squared<-c(sum.fit0.r,sum.fit1.r, sum.fit2.r, sum.fit3.r, sum.fit4.r, sum.fit5.r)
+r.squared
+
+
+
+```
+### GAM
+
+Generalised additive  model could be another approach for multiple linear regression. It provides flexible smoothing functions of some predictor variables, and interest focuses on inference about these smooth functions, parameter that directly controls the smoothness of the curve, or estimated predictive accuracy.
+2GAM fits included to the project.
+The first fit includes smoothing terms applied to all numerical predictors and log transformation is kept for the response variable. In this model fragility seems to be less significant with p-value >0.05.
+For the second GAM model the interaction between Artist Reputation and Width was included.
+According to gam check function, which performs residual diagnostic, the first fit might require more degrees of freedom for Price of Sculpture as it has low p-value  k almost equal edf and k_index <0. Similarly for Weight. It was changed for the second fit.
+
+```{r}
+
+library(mgcv)
+library(pander)
+str(sculp2)
+sculp2$Material <- as.factor(sculp2$Material)
+sculp2$International<- as.factor(sculp2$International)
+sculp2$Express_Shipment<- as.factor(sculp2$Express_Shipment)
+sculp2$Installation_Included <- as.factor(sculp2$Installation_Included)
+sculp2$Transport <- as.factor(sculp2$Transport)
+sculp2$Fragile<- as.factor(sculp2$Fragile)
+sculp2$Customer_Information <- as.factor(sculp2$Customer_Information)
+sculp2$Remote_Location <- as.factor(sculp2$Remote_Location)
+gam1 <- gam(log(Cost)~ s(Price_Of_Sculpture)  +  s(Base_Shipping_Price)+International+Express_Shipment+Installation_Included+Fragile+Customer_Information+s(Artist_Reputation)+s(Height)+s(Width)+Weight+Material+Remote_Location+Transport, data=sculp2)
+
+summ.gam<-summary(gam1)
+summ.gam
+RSE.gam<-sqrt(summ.gam$scale)
+Rsq.gam<-summ.gam$dev.expl
+AdjRsq.gam<-summ.gam$r.sq
+mod.summs<-data.frame(Statistic= c("RSE", "R-squared","Adj. R-squared"),
+GAM=c(RSE.gam, Rsq.gam, AdjRsq.gam))
+pander(mod.summs, caption="Model fit assessment measures")
+
+pander(summ.gam$s.table, caption="Summary of smooth terms", keep.trailing.zeros=TRUE)
+par(mfrow=c(2,2))
+gam.check(gam1)
+
+plot(gam1,residuals = TRUE, pch=1, rug=TRUE, scheme=1,shade.col="lightblue")
+plot(gam1, all.terms = TRUE,residuals=T, pch=19, cex=0.65, scheme = 1, shade.col="lightblue")# pages=1)
+
+
+```
+For the second GAM model interaction between Artist Reputation and Width was included. 
+```{r}
+gam2 <- gam(log(Cost)~ s(Price_Of_Sculpture, k=20)  +  s(Base_Shipping_Price)+International+Express_Shipment+Installation_Included+Fragile+Customer_Information+s(Artist_Reputation)+s(Height)+Width+Weight+Material+Remote_Location+Transport+te(Artist_Reputation,Width ), data=sculp2)
+
+sum.gam<-summary(gam2)
+RSE.gam<-sqrt(sum.gam$scale)
+Rsq.gam<-sum.gam$dev.expl
+AdjRsq.gam<-sum.gam$r.sq
+mod.summs<-data.frame(Statistic= c("RSE", "R-squared","Adj. R-squared"),
+GAM=c(RSE.gam, Rsq.gam, AdjRsq.gam))
+pander(mod.summs, caption="Model fit assessment measures")
+
+par(mfrow=c(2,2))
+gam.check(gam2)
+summary(gam2)
+plot(gam1,residuals = TRUE, pch=1, rug=TRUE, scheme=1,shade.col="lightblue")
+plot(gam1, all.terms = TRUE,residuals=T, pch=19, cex=0.65, scheme = 1, shade.col="lightblue")# pages=1)
+```
+Current models assessing
+
+```{r}
+aic.gam1 = AIC(gam1)
+aic.gam2 = AIC(gam2)
+aic.fit5 = AIC(fit5)
+bic.gam1 = BIC(gam1)
+bic.gam2 =BIC(gam2)
+bic.fit5 = BIC(fit5)
+
+modname <-c("non interation", "interation","linear")
+aicval <-c(aic.gam1, aic.gam2, aic.fit5)
+bicval<-c(bic.gam1, bic.gam2, bic.fit5)
+mod.commpare<-data.frame(modname,aicval,bicval)
+pander(mod.commpare, digits=3,  align="c")
+
+```
+
+
+###  Subset selection
+
+
+All the models still contain many predictors and it is not very obvious which of them are important for cost prediction.  “Subset selection” methods was used for this purpose to see how they could be reduced. For the forward selection the empty model is taken and then new predictors added to it, opposite for backward, where all predictors were added on the first instance and model is being estimated for this subset selection with Cp, AIC, BIC, or adjusted R2 , which is approximately related to the test MSE. The smallest value of the test MSE achieves the optimum balance between the bias-variance trade-off. 
+
+Library leaps contains “best subset”, “forward” and “backward” functions which could produce different set of predictors. For the first selection the number of values was set to 8 and 1 best model for each sum number of predictors. Figure 9 shows that the best model have been chosen model with predictors and they are “Price_Of_Sculpture","Base_Shipping_Price,"Artist_Reputation","Height" and “Express Shipment”.
+ 
+Forward and Backward selection left the same 5 predictors.
+
+
+```{r}
+names(sculp2)
+sculp3 <- sculp2 %>% 
+  dplyr::select("Cost","Price_Of_Sculpture","Installation_Included","Fragile", "Base_Shipping_Price","Artist_Reputation","Height","Width","Weight","Material","Transport","Customer_Information","Express_Shipment","International","Remote_Location")
+
+library(pander)
+library(leaps)
+
+regfit.full=regsubsets(Cost~.,sculp3,really.big=FALSE, nbest=1,nvmax=8,force.in=NULL,
+method=c("exhaustive","backward", "forward", "seqrep")) 
+reg.summary=summary(regfit.full)
+names(reg.summary)
+pander(reg.summary$outmat)
+library(ggplot2)
+par(mfrow=c(2,2))
+plot(reg.summary$rss,xlab="Number of Variables",ylab="RSS",type="l")
+plot(reg.summary$adjr2,xlab="Number of Variables",ylab="Adjusted RSq",type="l")
+plot(reg.summary$cp,xlab="Number of Variables",ylab="Cp",type="l")
+plot(reg.summary$bic,xlab="Number of Variables",ylab="BIC",type="l")
+coef(regfit.full,5)
+
+```
+Forward selection
+```{r}
+regfit.fwd=regsubsets(Cost~.,sculp3,nvmax=,method="forward") 
+reg.summary.fwd=summary(regfit.fwd)
+pander(reg.summary.fwd$outmat)
+
+par(mfrow=c(2,2))
+plot(reg.summary.fwd$rss,xlab="Number of Variables",ylab="RSS",type="l")
+plot(reg.summary.fwd$adjr2,xlab="Number of Variables",ylab="Adjusted RSq",type="l")
+plot(reg.summary.fwd$cp,xlab="Number of Variables",ylab="Cp",type="l")
+plot(reg.summary.fwd$bic,xlab="Number of Variables",ylab="BIC",type="l")
+
+```
+
+```{r}
+regfit.bwd=regsubsets(Cost~.,sculp3,nvmax=,method="forward") 
+reg.summary.bwd=summary(regfit.bwd)
+pander(reg.summary.bwd$outmat)
+
+par(mfrow=c(2,2))
+plot(reg.summary.bwd$rss,xlab="Number of Variables",ylab="RSS",type="l")
+plot(reg.summary.bwd$adjr2,xlab="Number of Variables",ylab="Adjusted RSq",type="l")
+plot(reg.summary.bwd$cp,xlab="Number of Variables",ylab="Cp",type="l")
+plot(reg.summary.bwd$bic,xlab="Number of Variables",ylab="BIC",type="l")
+par(mfrow=c(1,2))
+
+```
+
+### Shringkage method - Ridge regression model
+
+An alternative to subset selection methods ridge regression with cross validation  was applied as one of the shrinkage methods  od statistical learning with glmnet method. The features fit to the model were "Price_Of_Sculpture","Installation_Included","Fragile", "Base_Shipping_Price","Artist_Reputation","Height","Width","Weight","Material","Transport","Customer_Information","Express_Shipment","International","Remote_Location" the same as for subset selection.
+
+Best lambda =38. R-squared of predictions variables was calculated and equal 0.68. All the predictors are more then 0, however it is roughly seen that the more significant (with bigger coefficients) are the same “Price of sculpture”, “Base_Shipping_Price”, “Height”, “Express Shipment” . However “Width” coefficient is in the same group. Next follow “Material”,”Transport”,”Customer_Information”, ”Installation” 
+
+```{r}
+library(glmnet)
+#sculp2
+#sculp.log <- glm(Cost~ Price_Of_Sculpture  +  Base_Shipping_Price +International+Express_Shipment+Installation_Included+Fragile+Customer_Information+Artist_Reputation+Height+Width+Weight+Material+Remote_Location+Transport, data=sculp3)
+X=model.matrix(Cost~.,sculp3)
+y=sculp3$Cost
+length(y)
+n <- length(y)
+dim(X)
+
+train_index <- sample(n, n*0.8)
+length(train_index)
+y_train <- y[train_index]
+length(y_train)
+X_train <- sculp3[train_index,]
+dim(X_train)
+
+X_test <- sculp3[-train_index,]
+dim(X_test)
+head(X_test)
+y_test <- y[-train_index]
+length(y_test)
+X_train.matr<-X[train_index,]
+X_test.matr<-X[-train_index,]
+
+
+dim(X_train)
+dim(X_test)
+set.seed(1)
+cv.out=cv.glmnet(X_train.matr,y_train,alpha=0)
+plot(cv.out)
+bestlam=cv.out$lambda.min
+bestlam
+log(bestlam)
+out=glmnet(X_train.matr,y_train,alpha=0)
+predict(out,type="coefficients",s=bestlam)
+y_predicted <- predict(out, s=bestlam,newx = X_test.matr)
+dim(y_predicted)
+plot(cv.out)
+#find SST and SSE
+sst <- sum((y_test - mean(y_test))^2)
+sse <- sum((y_predicted - y_test)^2)
+
+#find R-Squared
+rsq.ridge <- 1 - sse/sst
+mse.ridge <- mean((y_test - y_predicted)^2)/length(y_test)
+
+
+```
+
+###	Fits with reduced features
+ 
+Fitting reduced set of predictors to linear and gam model, gave the following results. It seems that BIC and AIC value higher than for full models. Also linear model and gam with 5 predictors are estimated as better rather than with 11 for both AIC and BIC criterions.  It seems that the rough cut of criteria based on lower or higher coefficients when they are extremely small did not work well for model selection. So for the next comparison from this step first linear model with 5 predictors is taken, and gam with 5 predictors. 
+
+```{r}
+
+fit.new1 <-lm(log(Cost)~ Price_Of_Sculpture  + poly(Base_Shipping_Price,10) + International + poly(Artist_Reputation,8)+Height+Express_Shipment, data=X_train)
+#Testing
+#new_data = data.frame(Price_Of_Sculpture =c(85),Base_Shipping_Price=c(73),International = c("No"), Artist_Reputation = c(0.49), Height = c(58), Express_Shipment = c("No"))
+#new_data
+#prediction <- predict(fit.new1, newdata = new_data)
+#prediction
+#exp(prediction)
+
+fit.new2 <-lm(log(Cost)~ Price_Of_Sculpture  +  poly(Base_Shipping_Price,10) +Express_Shipment+Installation_Included+Customer_Information+Height+log(Width)+Material+Transport, data=X_train)
+gam.new1 <-gam(log(Cost)~ s(Price_Of_Sculpture)  +  s(Base_Shipping_Price) + s(Height)+s(Artist_Reputation)+Express_Shipment, data=X_train)
+gam.new2 <-gam(log(Cost)~ s(Price_Of_Sculpture)  +  s(Base_Shipping_Price)+Express_Shipment+Installation_Included+Customer_Information+s(Height)+s(Width)+Weight+Material+Transport, data=X_train)
+sum.gam.new1<-summary(gam.new1)
+sum.gam.new1$r.sq
+sum.gam.new2<-summary(gam.new1)
+sum.gam.new2$r.sq
+sum.fit.new1<-summary(fit.new1)
+sum.fit.new1$r.sq
+sum.fit.new2<-summary(fit.new1)
+sum.fit.new2$r.sq
+plot(fit.new1)
+aic.gam.new1 = AIC(gam.new1)
+aic.gam.new2 = AIC(gam.new2)
+aic.fit.new1 = AIC(fit.new1)
+aic.fit.new2 = AIC(fit.new2)
+bic.gam.new1 = BIC(gam.new1)
+bic.gam.new2 =BIC(gam.new2)
+bic.fit.new1 = BIC(fit.new1)
+bic.fit.new2 = BIC(fit.new2)
+
+modname <-c("linear 5", "linear 11","gam 5", "gam 11")
+aicval <-c(aic.fit.new1, aic.fit.new2, aic.gam.new1, aic.gam.new2)
+bicval<-c(bic.fit.new1, bic.fit.new2, bic.gam.new1, bic.gam.new2)
+r_sq<-c(sum.fit.new1$r.sq,sum.fit.new2$r.sq,sum.gam.new1$r.sq,sum.gam.new2$r.sq)
+mod.commpare<-data.frame(modname,aicval,bicval,r_sq)
+pander(mod.commpare, digits=3,  align="c")
+
+```
+
+###	Prediction estimation
+
+For these step 5 models were selected based on previous research. 
+1.	fit5 <- lm(log(Cost)~ Price_Of_Sculpture  +  poly(Base_Shipping_Price,10)+International+Express_Shipment+Installation_Included+Fragile+Customer_Information+poly(Artist_Reputation,8)+Height+log(Width)+Weight+Material+Remote_Location+Transport, data=X_train)
+2.	gam2 <- gam(log(Cost)~ s(Price_Of_Sculpture, k=20)  +  s(Base_Shipping_Price)+International+Express_Shipment+Installation_Included+Fragile+Customer_Information+s(Artist_Reputation)+s(Height)+Width+Weight+Material+Remote_Location+Transport+te(Artist_Reputation,Width ), data=X_train)
+3.	fit.new1 <-lm(log(Cost)~ Price_Of_Sculpture  + poly(Base_Shipping_Price,10) + International + poly(Artist_Reputation,8)+Height+Express_Shipment, data=X_train)
+4.	gam.new1 <-gam(log(Cost)~ s(Price_Of_Sculpture)  +  s(Base_Shipping_Price) + s(Height)+s(Artist_Reputation)+Express_Shipment, data=X_train)
+5.	Ridge regression with  the following predictors "Price_Of_Sculpture","Installation_Included","Fragile", "Base_Shipping_Price","Artist_Reputation","Height","Width","Weight","Material","Transport","Customer_Information","Express_Shipment","International","Remote_Location"
+Before predicting y hat data, the existing set should be divided into training and test in proportion 20/80  and refit again. 
+I would like to highlight 2 important steps in the process of prediction and prediction estimating
+-	All predictions had been done for log(cost) , so for transforming them back exp() function was used over all y hat set
+-	To bring all the models to the same estimators MSE and R-squared had been used.
+
+All   5 models had  been resulting in a merged table. Best results showed GAM model with all  main predictors. Next reduced GAM model. Ridge model showed not high MSE however the lowest prediction  results.  And it is opposite for both linear models, the result of prediction were better for linear models, however, they show much more significant mean squared error.
+
+```{r}
+fit5 <- lm(log(Cost)~ Price_Of_Sculpture  +  poly(Base_Shipping_Price,10)+International+Express_Shipment+Installation_Included+Fragile+Customer_Information+poly(Artist_Reputation,8)+Height+log(Width)+Weight+Material+Remote_Location+Transport, data=X_train)
+summary(fit5)
+fit5_predictions <-predict(fit5,newdata = X_test  )
+fit5_predictions_transformed <-exp(fit5_predictions)
+
+#find SST and SSE
+sst <- sum((y_test - mean(y_test))^2)
+sse <- sum((exp(fit5_predictions) - y_test)^2)
+#find R-Squared
+rsq.fit5 <- 1 - sse/sst
+rsq.fit5
+mse.fit5<- mean((y_test - exp(fit5_predictions))^2)/length(y_test)
+gam2 <- gam(log(Cost)~ s(Price_Of_Sculpture, k=20)  +  s(Base_Shipping_Price)+International+Express_Shipment+Installation_Included+Fragile+Customer_Information+s(Artist_Reputation)+s(Height)+Width+Weight+Material+Remote_Location+Transport+te(Artist_Reputation,Width ), data=X_train)
+gam2_predictions <-predict(gam2, newdata = X_test )
+#find SST and SSE
+sse <- sum((exp(gam2_predictions) - y_test)^2)
+#find R-Squared
+rsq.gam2 <- 1 - sse/sst
+mse.gam2 <- mean((y_test - exp(gam2_predictions))^2)/length(y_test)
+
+fit.new5_pred<-predict(fit.new1, newdata = X_test)
+sse <- sum((exp(fit.new5_pred) - y_test)^2)
+rsq.fitnew5 <- 1 - sse/sst
+mse.fitnew5 <- mean((y_test - exp(fit.new5_pred))^2)/length(y_test)
+gam5_pred <-predict(gam.new1, newdata = X_test)
+sse <- sum((exp(gam5_pred) - y_test)^2)
+rsq.gam5 <- 1 - sse/sst
+mse.gam5 <- mean((y_test - exp(gam5_pred))^2)/length(y_test)
+names<-c("FIT","GAM", "FIT5", "GAM5","RIDGE" )
+mses<-c(mse.fit5, mse.gam2, mse.fitnew5, mse.gam5, mse.ridge)
+r_sqs<- c(rsq.fit5, rsq.gam2, rsq.fitnew5, rsq.gam5, rsq.ridge)
+my_table<-data.frame(names, mses, r_sqs)
+pander(my_table, digits=3,  align="c")
+head(X_test)
+```
+
+## Results
+
+For results 2 models had been selected. 
+GAM model with 13 predictors and interaction.:
+Price_Of_Sculpture,Base_Shipping_Price,International,Express_Shipment, Installation_Included, Fragile, Customer_Information, Artist_Reputation, Height, Width, Weight, Material, Remote_Location, Transport, interaction (Artist_Reputatio*Width):
+Smooth function applied for  4 predictors and interaction. 77.6% of data could be explained by the model.
+and GAM model with 5 predictors:
+Price_Of_Sculpture,Base_Shipping_Price,International,Express_Shipment, Artist_Reputation and Height
+Smooth function  applied to all the predictors. 75% of data could be explained by this model.
+Smooth terms are making explaining of individual predictor influence more complicated.
+To keep less complexity of the model, liner models should be chosen. Complexity is the week point of the selected models.
+Confidence interval for gam models was calculated.
+There is an example table produced by code from the last section. For this example 11-th row from test data was selected.
+This means that if Price of Sculpture=193, No installation, Not Frigile, Base_Shipping_Price =80.23, Artist_Reputation = 0.59, Height = 16, Width = 6, Weight = 61911, Material =storn, Transport= Roadways, Customer_Information=Working Class, No Express_Shipment, International, Not remote location item will be shipped that with 95% of confidence the price 
+with the lay between 1316 and 1535 for first model and between 1423 and 1603 for second model
+
+
+```{r}
+summary(gam2)
+summary(gam.new1)
+
+index = 11
+value<-X_test[index,]$Cost
+X_test[index,]
+summary(gam2)
+pred<-exp(predict(gam2, newdata = X_test[index,]))
+p<-predict(gam2, newdata = X_test[index,],type = "link", se.fit = TRUE)
+upr <- exp(p$fit + (2 * p$se.fit))
+lwr <- exp(p$fit - (2 * p$se.fit))
+pred2<-exp(predict(gam.new1, newdata = X_test[index,]))
+p2<-predict(gam.new1, newdata = X_test[index,],type = "link", se.fit = TRUE)
+upr2 <- exp(p2$fit + (2 * p2$se.fit))
+lwr2 <- exp(p2$fit - (2 * p2$se.fit))
+conf_names<-c("lwr","fit","upr")
+mod1<-c( lwr,pred, upr)
+mod2<-c( lwr2,pred2, upr2)
+real<-c("-", value,"-")
+my_table_conf<-data.frame(conf_names,mod1,mod2,real)
+pander(my_table_conf)
+
+
+
+```
+
+## Next steps
+
+What could be done next? The predictability of the final models is not very high and not all the abalable options were investigated in this project. There was only one example with interactions and it was successful. More models could be built with different combinations of different interacting predictors. There was only one method of selecting valuable predictors covered and on Shrinkage method – Ridge regression. Lasso could be next trial, as well as other tools for selecting predictors. Smooth term degrees of freedom changing was not fully investigated.
+Also the code could be rewritten to be able quickly switch parameters and produce and access different models in more automotive way.
+Concerning interpretation of current model it would be good to add how change for each particular predictor influence cost changes and investigate how to reverse smooth terms.
+To keep less complexity of the model, liner models should be chosen. Complexity is the week point of the selected models. This might be investigated with special methods.
+
+
+
+
+
+
+
+
